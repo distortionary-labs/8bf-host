@@ -1,0 +1,70 @@
+[package]
+name = "eightbf-host-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+eightbf-host = { path = ".." }
+image = { version = "0.25", default-features = false }
+serde_json = "1"
+
+# Keep the fuzz crate out of the main package's workspace.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "pe"
+path = "fuzz_targets/pe.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rsrc"
+path = "fuzz_targets/rsrc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pipl"
+path = "fuzz_targets/pipl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "descriptor"
+path = "fuzz_targets/descriptor.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "preset"
+path = "fuzz_targets/preset.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config"
+path = "fuzz_targets/config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "image"
+path = "fuzz_targets/image.rs"
+test = false
+doc = false
+bench = false

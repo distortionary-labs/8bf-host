@@ -1,0 +1,11 @@
+[toolchain]
+channel = "1.97.1"
+components = ["rustc", "cargo", "rust-std", "clippy", "rustfmt"]
+# Static Linux builds for x86-64 and ARM. Windows builds are the workers Linux
+# runs under Wine; i686 runs 32-bit filters.
+targets = [
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+  "x86_64-pc-windows-gnu",
+  "i686-pc-windows-gnu",
+]

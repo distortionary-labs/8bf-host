@@ -1,0 +1,2 @@
+8BF-HOST-DESCRIPTOR
+[{"key":"Amnt","type":"long","value":50},{"key":"Rds ","type":"doub","value":1.5},{"key":"Inv ","type":"bool","value":true},{"key":"Data","type":"tdta","value":{"bytes":"AAEC"}},{"key":"Pnt ","type":"Objc","value":{"descriptor":[{"key":"Hrzn","type":"long","value":3}]}},{"key":"List","type":"VlLs","value":{"tuple":[1,2.5,false]}}]

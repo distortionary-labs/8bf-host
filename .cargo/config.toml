@@ -1,0 +1,9 @@
+[alias]
+# Static Linux binaries.
+br = "zigbuild --release --target x86_64-unknown-linux-musl"
+barm = "zigbuild --release --target aarch64-unknown-linux-musl"
+# Windows workers: the 64-bit one runs Windows filters under Wine.
+bwin = "zigbuild --release --target x86_64-pc-windows-gnu"
+bwin32 = "zigbuild --release --target i686-pc-windows-gnu"
+# The test suite in both FilterRecord layouts.
+test-layouts = "test --features pack4"

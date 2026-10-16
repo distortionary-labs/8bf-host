@@ -1,0 +1,47 @@
+# 8bf-host configuration. Every setting is optional; the values shown are
+# the defaults. Copy the parts you need to:
+#   Linux    ~/.config/8bf-host/config.toml
+#   macOS    ~/Library/Application Support/8bf-host/config.toml
+#   Windows  %APPDATA%\8bf-host\config.toml
+# or point EIGHTBF_HOST_CONFIG / --config at a file.
+
+# Folders scanned, with subfolders, for filters. "~" means your home folder.
+# Default: the Adobe plug-in folders on Windows and macOS, and ~/8bf-plugins,
+# where they exist. EIGHTBF_HOST_PLUGIN_PATH and --plugin-dir add more.
+plugin_dirs = ["~/8bf-plugins"]
+
+# Where filters run: "auto" (in this process when the architecture matches,
+# else a worker), "in-process", or "worker" (always a separate process).
+run_mode = "auto"
+
+# Run 8-bit-only filters on an 8-bit copy of 16-bit images.
+allow_8bit_fallback = true
+
+# Cache filter scans between runs.
+cache = true
+
+# Builds of 8bf-host for other architectures. When unset, 8bf-host looks
+# next to its own executable for 8bf-host-win-x64.exe, 8bf-host-win-x86.exe
+# and 8bf-host-mac-x64.
+[workers]
+# win_x64 = "~/.local/lib/8bf-host/8bf-host-win-x64.exe"
+# win_x86 = "~/.local/lib/8bf-host/8bf-host-win-x86.exe"
+# mac_x64 = "/usr/local/lib/8bf-host/8bf-host-mac-x64"
+
+# How Windows workers start on Linux and other Unix systems.
+[wine]
+command = "wine"
+# prefix = "~/.wine-8bf"
+
+[server]
+listen = "127.0.0.1:8780"
+# Prefer the EIGHTBF_HOST_TOKEN environment variable to writing the token here.
+# Surrounding whitespace is trimmed, and an empty token counts as none.
+# token = ""
+# The limits must be at least 1; timeout_secs is at most 86400 (one day).
+max_upload_mb = 256
+max_pixels = 100000000
+timeout_secs = 300
+jobs = 2
+# Run every filter in a worker process so a crashing filter cannot stop the server.
+isolate = true

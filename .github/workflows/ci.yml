@@ -1,0 +1,136 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+    tags: ["v*"]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  toolchain:
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.read.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read channel from rust-toolchain.toml
+        id: read
+        run: |
+          channel=$(sed -n 's/^channel[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' rust-toolchain.toml)
+          if [[ -z $channel ]]; then
+            echo "no channel found in rust-toolchain.toml" >&2
+            exit 1
+          fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+  # Fast checks first: formatting and lints on every platform we build for.
+  lint:
+    runs-on: ubuntu-latest
+    needs: toolchain
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ needs.toolchain.outputs.channel }}
+          components: clippy, rustfmt
+          targets: x86_64-pc-windows-gnu, aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets --features pack4 -- -D warnings
+      - run: cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings
+      - run: cargo clippy --all-targets --target aarch64-apple-darwin -- -D warnings
+      - run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # The test filter is compiled in both FilterRecord layouts.
+  test:
+    runs-on: ${{ matrix.os }}
+    needs: toolchain
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ needs.toolchain.outputs.channel }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test
+      - run: cargo test --features pack4
+
+  # Windows itself, with the same target as the release. MinGW's gcc on the
+  # runner links the host and builds the test filter as a DLL. Windows always
+  # uses the pack(4) layout, so there is no separate pack4 run.
+  windows:
+    runs-on: windows-latest
+    needs: toolchain
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ needs.toolchain.outputs.channel }}
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+      # Without a compiler the filter tests skip instead of failing.
+      - run: gcc --version
+      - run: cargo test --target x86_64-pc-windows-gnu
+
+  # Windows filters on Linux: build the Windows worker and run it under Wine.
+  wine:
+    runs-on: ubuntu-latest
+    needs: toolchain
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ needs.toolchain.outputs.channel }}
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.1
+      - run: cargo install --locked cargo-zigbuild --version 0.23.4
+      - name: Install Wine
+        run: sudo apt-get update && sudo apt-get install -y wine64
+      - name: Build the Windows worker
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          printf '#!/bin/sh\nexec zig dlltool "$@"\n' > "$HOME/.local/bin/x86_64-w64-mingw32-dlltool"
+          chmod +x "$HOME/.local/bin/x86_64-w64-mingw32-dlltool"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          PATH="$HOME/.local/bin:$PATH" cargo zigbuild --release --target x86_64-pc-windows-gnu
+      - name: Run the Wine tests
+        env:
+          WINEDEBUG: -all
+          EIGHTBF_HOST_TEST_WINE_WORKER: ${{ github.workspace }}/target/x86_64-pc-windows-gnu/release/8bf-host.exe
+          EIGHTBF_HOST_TEST_WINE: wine64
+        run: |
+          wineboot --init || true
+          cargo test --test wine
+
+  release-build:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [toolchain, lint, test, windows, wine]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ needs.toolchain.outputs.channel }}
+          targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, x86_64-pc-windows-gnu, i686-pc-windows-gnu
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.1
+      - run: cargo install --locked cargo-zigbuild --version 0.23.4
+      - run: bin/release --build-only
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*

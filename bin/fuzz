@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Runs the cargo-fuzz targets in fuzz/.
+#
+#   bin/fuzz                  run every target for 60 seconds each
+#   bin/fuzz pe               run one target until stopped
+#   bin/fuzz pe 300           run one target for 300 seconds
+#   bin/fuzz pe 0 -jobs=8     pass further options to libFuzzer
+#
+# Needs a nightly toolchain and cargo-fuzz:
+#
+#   rustup toolchain install nightly
+#   cargo install --locked cargo-fuzz
+#
+# New inputs go to fuzz/corpus/<target>, which is not committed; the seeds
+# in fuzz/seeds/<target> are read on every run. Crashes are saved under
+# fuzz/artifacts/<target>; replay one with
+#
+#   cargo +nightly fuzz run <target> fuzz/artifacts/<target>/<file>
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+toolchain=${FUZZ_TOOLCHAIN:-nightly}
+
+run() {
+  local target=$1 seconds=$2
+  shift 2
+  local time_args=()
+  if [[ "$seconds" != 0 ]]; then
+    time_args=(-max_total_time="$seconds")
+  fi
+  mkdir -p "fuzz/corpus/$target"
+  cargo "+$toolchain" fuzz run "$target" \
+    "fuzz/corpus/$target" "fuzz/seeds/$target" \
+    -- "${time_args[@]}" "$@"
+}
+
+if [[ $# -eq 0 ]]; then
+  for target in $(cargo "+$toolchain" fuzz list); do
+    echo "==> $target"
+    run "$target" 60
+  done
+else
+  target=$1
+  seconds=${2:-0}
+  shift $(($# < 2 ? $# : 2))
+  run "$target" "$seconds" "$@"
+fi
