@@ -110,11 +110,15 @@ jobs:
         env:
           WINEDEBUG: -all
           EIGHTBF_HOST_TEST_WINE_WORKER: ${{ github.workspace }}/target/x86_64-pc-windows-gnu/release/8bf-host.exe
-          EIGHTBF_HOST_TEST_WINE: wine64
+          EIGHTBF_HOST_TEST_WINE: wine
         run: |
           wineboot --init || true
           cargo test --test wine
 
+  # Everything below runs only for a v* tag, after every check above passes.
+  # bin/release creates and pushes that tag.
+
+  # Static Linux binaries and both Windows builds, cross-compiled.
   release-build:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [toolchain, lint, test, windows, wine]
@@ -129,8 +133,107 @@ jobs:
         with:
           version: 0.15.1
       - run: cargo install --locked cargo-zigbuild --version 0.23.4
-      - run: bin/release --build-only
+      - name: Build
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          for arch in x86_64 i686; do
+            printf '#!/bin/sh\nexec zig dlltool "$@"\n' > "$HOME/.local/bin/$arch-w64-mingw32-dlltool"
+            chmod +x "$HOME/.local/bin/$arch-w64-mingw32-dlltool"
+          done
+          export PATH="$HOME/.local/bin:$PATH"
+          cargo zigbuild --release --target x86_64-unknown-linux-musl
+          cargo zigbuild --release --target aarch64-unknown-linux-musl
+          cargo zigbuild --release --target x86_64-pc-windows-gnu
+          cargo zigbuild --release --target i686-pc-windows-gnu
+      - name: Collect
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          mkdir dist
+          cp target/x86_64-unknown-linux-musl/release/8bf-host "dist/8bf-host-$version-linux-x64"
+          cp target/aarch64-unknown-linux-musl/release/8bf-host "dist/8bf-host-$version-linux-arm64"
+          cp target/x86_64-pc-windows-gnu/release/8bf-host.exe "dist/8bf-host-$version-win-x64.exe"
+          cp target/i686-pc-windows-gnu/release/8bf-host.exe "dist/8bf-host-$version-win-x86.exe"
       - uses: actions/upload-artifact@v4
         with:
-          name: dist
+          name: dist-linux-windows
           path: dist/*
+
+  # The universal macOS binary, built on a Mac with Apple's own SDK. The
+  # linker ad-hoc signs the arm64 half so it starts on Apple silicon.
+  release-build-macos:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [toolchain, lint, test, windows, wine]
+    runs-on: macos-latest
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ needs.toolchain.outputs.channel }}
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - run: cargo build --release --target aarch64-apple-darwin
+      - run: cargo build --release --target x86_64-apple-darwin
+      - name: Combine
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          mkdir dist
+          lipo -create -output "dist/8bf-host-$version-macos-universal" \
+            target/aarch64-apple-darwin/release/8bf-host \
+            target/x86_64-apple-darwin/release/8bf-host
+          lipo -info "dist/8bf-host-$version-macos-universal"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos
+          path: dist/*
+
+  # The GitHub release, with checksums and the version's CHANGELOG section as
+  # its notes. Also publishes to crates.io when CARGO_REGISTRY_TOKEN is set.
+  release:
+    needs: [toolchain, release-build, release-build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+      - name: Check the tag against Cargo.toml
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          if [[ "v$version" != "$GITHUB_REF_NAME" ]]; then
+            echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $version" >&2
+            exit 1
+          fi
+      - name: Write release notes
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          awk -v v="$version" '
+            index($0, "## " v " ") == 1 { on = 1; next }
+            on && /^## / { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          if [[ ! -s notes.md ]]; then
+            echo "CHANGELOG.md has no section for $version" >&2
+            exit 1
+          fi
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          chmod +x dist/*
+          (cd dist && sha256sum ./* > SHA256SUMS)
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "8bf-host ${GITHUB_REF_NAME#v}" --notes-file notes.md
+      - uses: dtolnay/rust-toolchain@master
+        if: env.CARGO_REGISTRY_TOKEN != ''
+        with:
+          toolchain: ${{ needs.toolchain.outputs.channel }}
+      - name: Publish to crates.io
+        if: env.CARGO_REGISTRY_TOKEN != ''
+        run: cargo publish --locked

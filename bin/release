@@ -1,98 +1,78 @@
 #!/usr/bin/env bash
-# Builds and (optionally) tags a release of 8bf-host.
+# Releases 8bf-host.
 #
-#   bin/release               check, build every target into dist/, tag v<version>
-#   bin/release --build-only  build into dist/ without checks or tagging (CI)
+#   bin/release 0.2.0   set the version, date the changelog, check, commit,
+#                       tag v0.2.0 and push
+#   bin/release         the same for the version already in Cargo.toml
 #
-# Builds: static Linux binaries for x86-64 and ARM, the 64-bit Windows build
-# (the Wine worker on Linux, and the Windows release), and the 32-bit Windows
-# build for 32-bit filters, all with cargo-zigbuild. The universal macOS
-# binary is built with cargo-zigbuild too, inside its Docker image, which
-# carries the macOS SDK; that step needs Docker.
+# The version's changelog section is the "## Unreleased" one, renamed to
+# "## <version> - <today>"; if a dated section for the version already
+# exists, it is used as is.
 #
-# Publishing to crates.io and uploading to GitHub stay manual on purpose:
-# the script stops after tagging and prints the commands.
+# Pushing the tag is the release: CI runs the full test suite, builds the
+# Linux, Windows and macOS binaries, creates the GitHub release with them
+# and the changelog section as notes, and publishes to crates.io when the
+# CARGO_REGISTRY_TOKEN secret is set. Nothing is built here.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-build_only=false
-if [[ "${1:-}" == "--build-only" ]]; then
-  build_only=true
-fi
-
-# The cargo-zigbuild image that carries the macOS SDK. Keep the tag in step
-# with the cargo-zigbuild version CI installs.
-zigbuild_image=ghcr.io/rust-cross/cargo-zigbuild:0.23.4
-
-version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
-if [[ -z "$version" ]]; then
-  echo "error: no version in Cargo.toml" >&2
+current=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+version=${1:-$current}
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo "error: '$version' is not a semver version" >&2
   exit 1
 fi
 
-# Rust's windows-gnu targets call MinGW's dlltool; zig provides one.
-shim_dir=$(mktemp -d)
-trap 'rm -rf "$shim_dir"' EXIT
-for arch in x86_64 i686; do
-  printf '#!/bin/sh\nexec zig dlltool "$@"\n' > "$shim_dir/$arch-w64-mingw32-dlltool"
-  chmod +x "$shim_dir/$arch-w64-mingw32-dlltool"
-done
-export PATH="$shim_dir:$PATH"
-
-if ! $build_only; then
-  if [[ -n "$(git status --porcelain)" ]]; then
-    echo "error: the working tree has uncommitted changes" >&2
-    exit 1
-  fi
-  if ! grep -q "^## $version - " CHANGELOG.md; then
-    echo "error: CHANGELOG.md has no '## $version - <date>' heading" >&2
-    exit 1
-  fi
-  if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
-    echo "error: tag v$version already exists" >&2
-    exit 1
-  fi
-  cargo fmt --all -- --check
-  cargo clippy --all-targets -- -D warnings
-  cargo test
-  cargo test --features pack4
-  cargo publish --dry-run
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "error: the working tree has uncommitted changes" >&2
+  exit 1
+fi
+branch=$(git rev-parse --abbrev-ref HEAD)
+if [[ "$branch" != main ]]; then
+  echo "error: releases are made from main, not $branch" >&2
+  exit 1
+fi
+git fetch -q origin main --tags
+if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
+  echo "error: main and origin/main differ; pull or push first" >&2
+  exit 1
+fi
+if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+  echo "error: tag v$version already exists" >&2
+  exit 1
 fi
 
-rm -rf dist
-mkdir -p dist
-cargo zigbuild --release --target x86_64-unknown-linux-musl
-cargo zigbuild --release --target aarch64-unknown-linux-musl
-cargo zigbuild --release --target x86_64-pc-windows-gnu
-cargo zigbuild --release --target i686-pc-windows-gnu
-# Runs as root so rustup can install the toolchain from rust-toolchain.toml;
-# the named volumes keep it and the crate cache between releases. A separate
-# target folder keeps the container's build scripts away from the host's.
-docker run --rm -v "$PWD":/io -w /io \
-  -v 8bf-host-cargo-registry:/usr/local/cargo/registry \
-  -v 8bf-host-rustup:/usr/local/rustup \
-  -e CARGO_TARGET_DIR=/io/target/docker \
-  "$zigbuild_image" \
-  sh -c "rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null &&
-    cargo zigbuild --release --target universal2-apple-darwin;
-    status=\$?; chown -R $(id -u):$(id -g) target/docker; exit \$status"
-cp target/x86_64-unknown-linux-musl/release/8bf-host "dist/8bf-host-$version-linux-x64"
-cp target/aarch64-unknown-linux-musl/release/8bf-host "dist/8bf-host-$version-linux-arm64"
-cp target/x86_64-pc-windows-gnu/release/8bf-host.exe "dist/8bf-host-$version-win-x64.exe"
-cp target/i686-pc-windows-gnu/release/8bf-host.exe "dist/8bf-host-$version-win-x86.exe"
-cp target/docker/universal2-apple-darwin/release/8bf-host "dist/8bf-host-$version-macos-universal"
-(cd dist && sha256sum ./* > SHA256SUMS)
-echo "Built:"
-ls -1 dist
+# Undo the version and changelog edits if anything below fails.
+released=false
+trap '$released || git checkout -q -- Cargo.toml Cargo.lock CHANGELOG.md' EXIT
 
-if $build_only; then
-  exit 0
+if [[ "$version" != "$current" ]]; then
+  sed -i "0,/^version = \"$current\"/s//version = \"$version\"/" Cargo.toml
+  cargo update --workspace --offline -q
 fi
 
-git tag -s "v$version" -m "8bf-host $version"
+if ! grep -q "^## $version - " CHANGELOG.md; then
+  if ! grep -q '^## Unreleased$' CHANGELOG.md; then
+    echo "error: CHANGELOG.md has neither '## $version - <date>' nor '## Unreleased'" >&2
+    exit 1
+  fi
+  sed -i "0,/^## Unreleased$/s//## Unreleased\n\n## $version - $(date +%F)/" CHANGELOG.md
+fi
+
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+cargo test --features pack4
+cargo publish --dry-run --allow-dirty -q
+
+if [[ -n "$(git status --porcelain)" ]]; then
+  git commit -q -am "Release $version"
+fi
+released=true
+git tag -a "v$version" -m "8bf-host $version"
+git push --atomic origin HEAD:main "v$version"
+
 echo
-echo "Tagged v$version. To publish:"
-echo "  git push origin v$version"
-echo "  cargo publish"
-echo "  gh release create v$version dist/* --notes-file <(sed -n '/^## $version/,/^## /p' CHANGELOG.md | sed '\$d')"
+echo "Pushed v$version. CI builds and publishes the release:"
+echo "  gh run watch \$(gh run list -L 1 --branch v$version --json databaseId -q '.[0].databaseId')"

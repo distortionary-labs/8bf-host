@@ -36,5 +36,6 @@
 - [x] `CHANGELOG.md` updated under a dated heading
 - [x] Version set in `Cargo.toml` (semver)
 - [x] `cargo publish --dry-run` succeeds (also run by `bin/release`)
-- [ ] Git tag created: `git tag -s v<version>` (run by `bin/release`)
-- [ ] `cargo publish` ran
+- [ ] Git tag created and pushed (run by `bin/release`)
+- [ ] GitHub release created (CI, on the tag)
+- [ ] `cargo publish` ran (CI, when `CARGO_REGISTRY_TOKEN` is set)

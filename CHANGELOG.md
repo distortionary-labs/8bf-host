@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 0.1.0 - 2026-10-16
+
+Initial release.
+
+- `8bf-host run` filters image files (PNG, JPEG, TIFF, WebP, BMP, PNM, and
+  standard input and output), with selections from a mask image or a
+  rectangle, presets saved from and replayed to the filter, and distinct
+  exit codes per failure class.
+- `8bf-host list`, `show`, `about` and `doctor` find filters, describe them
+  and check what the system can run.
+- `8bf-host serve` offers the filters over HTTP, with each run isolated in a
+  worker process by default, loopback-only listening unless a token is set,
+  and limits on body size, image size and run time.
+- Filters run in-process when their architecture matches, otherwise in a
+  matching build of 8bf-host: the Windows build under Wine on Linux, the
+  32-bit Windows build for 32-bit filters, and Rosetta for Intel-only
+  filters on Apple silicon.
+- Filter discovery from Windows DLLs, macOS bundles and native libraries
+  with `.pipl` sidecars, with a scan cache.
+- 8- and 16-bit RGB and grayscale images with or without alpha, auto-masking,
+  filter-case handling, padding and input sampling, and an 8-bit fallback
+  for 8-bit-only filters.
+- Handle, buffer, resource, property, color, descriptor and PICA suites;
+  previews through `displayPixels` on Windows and macOS.
 - Fuzz targets for the PE, resource fork, PiPL, descriptor, preset,
   configuration and image parsers, with seed inputs, under `fuzz/`. Run
   them with `bin/fuzz`.
@@ -80,28 +104,3 @@
 - Configuration: `server.max_upload_mb`, `server.max_pixels` and
   `server.timeout_secs` must be at least 1, the timeout at most one day,
   and a blank `server.token` counts as no token.
-
-## 0.1.0 - 2026-10-08
-
-Initial release.
-
-- `8bf-host run` filters image files (PNG, JPEG, TIFF, WebP, BMP, PNM, and
-  standard input and output), with selections from a mask image or a
-  rectangle, presets saved from and replayed to the filter, and distinct
-  exit codes per failure class.
-- `8bf-host list`, `show`, `about` and `doctor` find filters, describe them
-  and check what the system can run.
-- `8bf-host serve` offers the filters over HTTP, with each run isolated in a
-  worker process by default, loopback-only listening unless a token is set,
-  and limits on body size, image size and run time.
-- Filters run in-process when their architecture matches, otherwise in a
-  matching build of 8bf-host: the Windows build under Wine on Linux, the
-  32-bit Windows build for 32-bit filters, and Rosetta for Intel-only
-  filters on Apple silicon.
-- Filter discovery from Windows DLLs, macOS bundles and native libraries
-  with `.pipl` sidecars, with a scan cache.
-- 8- and 16-bit RGB and grayscale images with or without alpha, auto-masking,
-  filter-case handling, padding and input sampling, and an 8-bit fallback
-  for 8-bit-only filters.
-- Handle, buffer, resource, property, color, descriptor and PICA suites;
-  previews through `displayPixels` on Windows and macOS.
