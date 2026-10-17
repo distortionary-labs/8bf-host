@@ -1,5 +1,7 @@
 # 8bf-host
 
+![A plasma ball photo, unfiltered on the left and through Retrotastical's arcade CRT look on the right](docs/images/hero.png)
+
 8bf-host runs Photoshop-compatible filter plug-ins (`.8bf` files) without Photoshop. It has two front ends: a command line that filters image files, and an HTTP server that filters images sent to it. It runs on Linux, Windows and macOS. On Linux, Windows filters run under Wine.
 
 It works without an image editor attached: apply a filter to a folder of scans, run one as a build step, or offer it to other programs as a service. See [Why 8bf-host exists](docs/background.md) for the longer story.
@@ -37,6 +39,35 @@ $ 8bf-host serve
 $ 8bf-host doctor
 ```
 
+## Examples
+
+One photo through five filters. Each one is a single `8bf-host run` with a preset:
+
+![The same squirrel photo through five Distortionary filters](docs/images/looks.png)
+
+```console
+$ 8bf-host run "Distortionary/Patterntastic..." squirrel.png squirrel-engraving.png --preset engraving.json
+$ 8bf-host run "Distortionary/Pixeltastic..." squirrel.png squirrel-pixels.png --preset pixels.json
+```
+
+`--mask` passes a selection. The filter's result is blended through it, soft edges included:
+
+![A landscape, a soft round mask, and the landscape engraved only inside the mask](docs/images/selection.png)
+
+```console
+$ 8bf-host run "Distortionary/Patterntastic..." mudpots.png mudpots-engraving.png --preset engraving.json --mask mask.png
+```
+
+One preset, replayed over a folder of photos without opening the filter's dialog:
+
+![Four different photos, all through the same halftone preset](docs/images/batch.png)
+
+Bloomifier on fireworks:
+
+![Fireworks before and after Bloomifier](docs/images/bloom.png)
+
+The filters shown are Windows 8bf plug-ins, run on Linux under Wine. Photo credits are in [docs/images/CREDITS.md](docs/images/CREDITS.md).
+
 ## Documentation
 
 - [Using the command line](docs/cli.md): finding filters, running them, presets, repeated runs, exit codes
@@ -65,3 +96,7 @@ at your option.
 Unless you explicitly state otherwise, any contribution intentionally submitted
 for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
 dual licensed as above, without any additional terms or conditions.
+
+---
+
+[Distortionary.com](https://distortionary.com)
