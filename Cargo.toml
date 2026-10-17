@@ -1,6 +1,6 @@
 [package]
 name = "eightbf-host"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.88"
 description = "Run Photoshop-compatible filter plug-ins (.8bf) from the command line or over HTTP"
@@ -76,6 +76,8 @@ priority = "optional"
 assets = [
   ["target/release/8bf-host", "usr/bin/", "755"],
   ["README.md", "usr/share/doc/8bf-host/", "644"],
+  ["docs/*.md", "usr/share/doc/8bf-host/docs/", "644"],
+  ["config.example.toml", "usr/share/doc/8bf-host/", "644"],
   ["LICENSE-MIT", "usr/share/doc/8bf-host/", "644"],
   ["LICENSE-APACHE", "usr/share/doc/8bf-host/", "644"],
 ]
@@ -84,6 +86,8 @@ assets = [
 assets = [
   { source = "target/release/8bf-host", dest = "/usr/bin/8bf-host", mode = "755" },
   { source = "README.md", dest = "/usr/share/doc/8bf-host/README.md", mode = "644" },
+  { source = "docs/*.md", dest = "/usr/share/doc/8bf-host/docs/", mode = "644" },
+  { source = "config.example.toml", dest = "/usr/share/doc/8bf-host/config.example.toml", mode = "644" },
   { source = "LICENSE-MIT", dest = "/usr/share/doc/8bf-host/LICENSE-MIT", mode = "644" },
   { source = "LICENSE-APACHE", dest = "/usr/share/doc/8bf-host/LICENSE-APACHE", mode = "644" },
 ]

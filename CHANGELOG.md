@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0 - 2026-10-17
+
 ## 0.1.0 - 2026-10-16
 
 Initial release.
