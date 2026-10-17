@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 /// Process exit codes. These are part of the command line interface; see
-/// the "Exit codes" section of the README before changing them.
+/// the "Exit codes" section of docs/cli.md before changing them.
 pub mod exit {
     pub const SUCCESS: u8 = 0;
     /// The filter ran and reported an error.

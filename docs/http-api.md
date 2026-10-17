@@ -1,6 +1,6 @@
 # HTTP API reference
 
-`8bf-host serve` exposes the installed filters over HTTP. This document lists every endpoint, option and error. For an introduction, and for the security defaults, see the [README](../README.md#using-the-http-server).
+`8bf-host serve` exposes the installed filters over HTTP. This document lists every endpoint, option and error. For an introduction, and for the security defaults, see [Using the HTTP server](server.md).
 
 All paths start with `/v1`. Responses are JSON, except a successful run, which returns the image. The version prefix will change only for incompatible changes; new fields may appear in JSON responses at any time, so clients should ignore fields they do not know.
 

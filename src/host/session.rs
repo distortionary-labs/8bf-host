@@ -40,6 +40,13 @@ const MAX_RECT16: i32 = i16::MAX as i32;
 /// The edge length of the tiles the host suggests to filters.
 const SUGGESTED_TILE: i32 = 1024;
 
+/// Spare bytes after every in, out and mask buffer. Some filters write a
+/// byte or two past the end of the rect they asked for (Cybia's EdgeWorks
+/// and Fotomatic filters do in grayscale); without room for that the write
+/// lands on the next heap block and the worker crashes later, far from the
+/// cause. One row of slack covers off-by-one row loops as well.
+const PORT_SLACK_MIN: usize = 64;
+
 /// The capacity of the Pascal string a filter can fill in for errReportString.
 const ERROR_STRING_BYTES: usize = 256;
 
@@ -1103,11 +1110,16 @@ impl SessionCore {
         else {
             return c::MEM_FULL_ERR;
         };
+        // The filter is told about `total` bytes; the slack after them only
+        // absorbs stray writes, and flush_output never reads it.
+        let Some(allocated) = row_bytes.max(PORT_SLACK_MIN).checked_add(total) else {
+            return c::MEM_FULL_ERR;
+        };
         let mut buffer = Vec::new();
-        if buffer.try_reserve_exact(total.max(1)).is_err() {
+        if buffer.try_reserve_exact(allocated).is_err() {
             return c::MEM_FULL_ERR;
         }
-        buffer.resize(total.max(1), 0);
+        buffer.resize(allocated, 0);
         if factor > 1 && !self.scaled.contains_key(&(key, factor)) {
             let source = match port {
                 Port::Mask => self.request.mask.as_ref(),
