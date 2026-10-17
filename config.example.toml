@@ -29,9 +29,11 @@ cache = true
 # mac_x64 = "/usr/local/lib/8bf-host/8bf-host-mac-x64"
 
 # How Windows workers start on Linux and other Unix systems.
+# Without a prefix, 8bf-host uses its own, ~/.local/share/8bf-host/wine,
+# and creates it on first use.
 [wine]
 command = "wine"
-# prefix = "~/.wine-8bf"
+# prefix = "~/.wine-filters"
 
 [server]
 listen = "127.0.0.1:8780"

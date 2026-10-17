@@ -71,8 +71,17 @@ pub struct Workers {
 pub struct Wine {
     /// The wine executable.
     pub command: String,
-    /// The `WINEPREFIX` to use; empty for Wine's default (`~/.wine`).
+    /// The `WINEPREFIX` to use; empty for 8bf-host's own prefix (see
+    /// [`default_wine_prefix`]), which it creates on first use.
     pub prefix: Option<PathBuf>,
+}
+
+impl Wine {
+    /// The prefix Windows workers run in: the configured one, else
+    /// [`default_wine_prefix`].
+    pub fn effective_prefix(&self) -> Option<PathBuf> {
+        self.prefix.clone().or_else(default_wine_prefix)
+    }
 }
 
 impl Default for Wine {
@@ -231,6 +240,14 @@ pub fn default_config_path() -> Option<PathBuf> {
 /// The scan cache file.
 pub fn cache_path() -> Option<PathBuf> {
     dirs::cache_dir().map(|dir| dir.join(APP_DIR).join("catalog.json"))
+}
+
+/// 8bf-host's own Wine prefix, used unless `wine.prefix` is set.
+///
+/// Wine's default, `~/.wine`, may be 32-bit or set up for other programs,
+/// so 8bf-host keeps a prefix of its own under the local data folder.
+pub fn default_wine_prefix() -> Option<PathBuf> {
+    dirs::data_local_dir().map(|dir| dir.join(APP_DIR).join("wine"))
 }
 
 /// Expands a leading `~` to the home directory.

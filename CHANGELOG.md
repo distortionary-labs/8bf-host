@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Windows filters on Linux run in 8bf-host's own Wine prefix,
+  `~/.local/share/8bf-host/wine`, which it creates on first use, instead of
+  Wine's default `~/.wine`. Set `wine.prefix` to keep using another one.
+- A 32-bit Wine prefix is detected before starting Wine: filters with
+  32-bit code fall back to the 32-bit worker, and 64-bit-only filters are
+  refused with an explanation instead of failing with "exited with code 1
+  without a result". `8bf-host doctor` reports the prefix and its
+  architecture.
+- A worker's error output is kept when a process it started (such as
+  `wineserver`) holds the pipe open, so the reason it failed is reported.
+- The "run again with --verbose" hint is no longer shown when `--verbose`
+  was given.
+
 ## 0.1.0 - 2026-10-17
 
 Initial release.

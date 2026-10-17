@@ -19,7 +19,4 @@
   enterShell = ''
   '';
 
-  git-hooks.hooks = {
-    rustfmt.enable = true;
-  };
 }

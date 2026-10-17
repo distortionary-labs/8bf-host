@@ -116,13 +116,13 @@ pub fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::from(exit::SUCCESS),
         Err(error) => {
-            report(&error, quiet);
+            report(&error, quiet, cli.global.verbose);
             ExitCode::from(error.exit_code())
         }
     }
 }
 
-fn report(error: &Error, quiet: bool) {
+fn report(error: &Error, quiet: bool, verbose: bool) {
     if matches!(error, Error::Cancelled) {
         if !quiet {
             eprintln!("cancelled");
@@ -131,7 +131,9 @@ fn report(error: &Error, quiet: bool) {
     }
     eprintln!("error: {error}");
     let hint = match error {
-        Error::FilterFailed { .. } => Some("run again with --verbose to see the host log"),
+        Error::FilterFailed { .. } if !verbose => {
+            Some("run again with --verbose to see the host log")
+        }
         Error::CannotRun(_) => Some("'8bf-host doctor' shows what this system can run"),
         _ => None,
     };

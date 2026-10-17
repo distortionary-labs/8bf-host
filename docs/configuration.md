@@ -13,6 +13,7 @@ ok   filters            3 found, 3 can run here
 ok   wine               /usr/bin/wine
 ok   win-x64 worker     /home/you/.local/lib/8bf-host/8bf-host-win-x64.exe
 note win-x86 worker     not found (/usr/local/bin/8bf-host-win-x86.exe); win-x86 filters cannot run
+ok   wine prefix        /home/you/.local/share/8bf-host/wine (64-bit)
 ok   server             listens on 127.0.0.1:8780, no token, filters isolated in workers
 ```
 

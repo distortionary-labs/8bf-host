@@ -10,7 +10,7 @@ use crate::cli::GlobalArgs;
 use crate::config::{default_config_path, Config};
 use crate::error::{Error, Result};
 use crate::host::structs::uses_pack4;
-use crate::runner::{self, Environment, Platform};
+use crate::runner::{self, Environment, Platform, PrefixArch};
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
@@ -82,6 +82,46 @@ fn worker_check(config: &Config, env: &Environment, arch: &str) -> Check {
             format!("not found ({}); {arch} filters cannot run", path.display()),
         ),
         None => note(format!("{arch} worker"), "not configured"),
+    }
+}
+
+fn prefix_check(config: &Config) -> Check {
+    let Some(prefix) = config.wine.effective_prefix() else {
+        return note(
+            "wine prefix",
+            "no data folder; Wine uses its default prefix",
+        );
+    };
+    match runner::wine_prefix_arch(&prefix) {
+        Some(PrefixArch::Win64) => check(
+            "wine prefix",
+            true,
+            format!("{} (64-bit)", prefix.display()),
+        ),
+        Some(PrefixArch::Win32) => check(
+            "wine prefix",
+            false,
+            format!(
+                "{} is 32-bit; 64-bit Windows filters cannot run{}",
+                prefix.display(),
+                if config.wine.prefix.is_some() {
+                    " (remove wine.prefix to use 8bf-host's own)"
+                } else {
+                    ""
+                }
+            ),
+        ),
+        None if prefix.join("system.reg").exists() => {
+            check("wine prefix", true, prefix.display().to_string())
+        }
+        None => check(
+            "wine prefix",
+            true,
+            format!(
+                "{} (created on the first Windows filter run)",
+                prefix.display()
+            ),
+        ),
     }
 }
 
@@ -161,6 +201,7 @@ pub fn run(global: &GlobalArgs, args: &DoctorArgs) -> Result<()> {
             });
             checks.push(worker_check(&config, &env, "win-x64"));
             checks.push(worker_check(&config, &env, "win-x86"));
+            checks.push(prefix_check(&config));
         }
         Platform::Windows => checks.push(worker_check(
             &config,

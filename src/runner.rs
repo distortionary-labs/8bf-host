@@ -12,11 +12,11 @@
 //!   on Apple silicon (under Rosetta), and for Windows filters on Linux,
 //!   where a Windows build of this program runs under Wine.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::config::{Config, RunMode};
@@ -143,6 +143,29 @@ fn worker_binary(config: &Config, env: &Environment, arch: &str) -> Option<PathB
     }
     let candidate = env.self_exe.parent()?.join(sibling);
     candidate.is_file().then_some(candidate)
+}
+
+/// The architecture a Wine prefix was created for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrefixArch {
+    Win32,
+    Win64,
+}
+
+/// Reads a Wine prefix's architecture from the `#arch=` line Wine writes
+/// near the top of `system.reg`. `None` when the prefix does not exist yet
+/// or does not say.
+pub fn wine_prefix_arch(prefix: &Path) -> Option<PrefixArch> {
+    let file = std::fs::File::open(prefix.join("system.reg")).ok()?;
+    let mut head = Vec::new();
+    file.take(4096).read_to_end(&mut head).ok()?;
+    String::from_utf8_lossy(&head).lines().find_map(|line| {
+        match line.trim().strip_prefix("#arch=")? {
+            "win32" => Some(PrefixArch::Win32),
+            "win64" => Some(PrefixArch::Win64),
+            _ => None,
+        }
+    })
 }
 
 fn worker_args(program: impl Into<OsString>) -> Vec<OsString> {
@@ -286,15 +309,21 @@ fn plan_wine(
     env: &Environment,
     runnable: &[String],
 ) -> Result<Plan> {
+    let prefix = config.wine.effective_prefix();
+    let prefix_32_bit = prefix.as_deref().and_then(wine_prefix_arch) == Some(PrefixArch::Win32);
     for arch in ["win-x64", "win-x86"] {
         if !runnable.iter().any(|candidate| candidate == arch) {
+            continue;
+        }
+        // A 32-bit prefix cannot start 64-bit programs at all.
+        if arch == "win-x64" && prefix_32_bit {
             continue;
         }
         let Some(program) = worker_binary(config, env, arch) else {
             continue;
         };
         let mut variables = vec![("WINEDEBUG".to_string(), "-all".to_string())];
-        if let Some(prefix) = &config.wine.prefix {
+        if let Some(prefix) = &prefix {
             variables.push(("WINEPREFIX".into(), prefix.to_string_lossy().into_owned()));
         }
         let mut command = worker_args(&config.wine.command);
@@ -312,6 +341,22 @@ fn plan_wine(
             },
             description: format!("under Wine ({arch}, {})", program.display()),
         });
+    }
+    if let (true, Some(prefix)) = (prefix_32_bit, &prefix) {
+        if runnable.iter().any(|arch| arch == "win-x64") {
+            return Err(Error::CannotRun(format!(
+                "{} is a 64-bit Windows filter, but the Wine prefix {} is 32-bit. {}",
+                info.name(),
+                prefix.display(),
+                if config.wine.prefix.is_some() {
+                    "Remove wine.prefix from the config file so 8bf-host uses its own prefix, \
+                     or point it at a 64-bit one."
+                } else {
+                    "Install a 64-bit Wine (wine64, or wine with WoW64 support), then delete \
+                     that folder so 8bf-host creates it again."
+                }
+            )));
+        }
     }
     if runnable.iter().any(|arch| arch.starts_with("win-")) {
         let wanted = if runnable.iter().any(|a| a == "win-x64") {
@@ -396,6 +441,12 @@ pub fn run_worker(
     let Some((program, args)) = command.split_first() else {
         return FilterResult::error("empty worker command", c::PARAM_ERR);
     };
+    if *wine {
+        if let Err(message) = prepare_wine_prefix(program, env, &plan.arch, job.path(), &mut hooks)
+        {
+            return FilterResult::error(message, c::PARAM_ERR);
+        }
+    }
     let mut process = Command::new(program);
     process
         .args(args)
@@ -433,12 +484,18 @@ pub fn run_worker(
         }
     });
     let stderr = child.stderr.take();
-    let (stderr_tx, stderr_rx) = mpsc::channel();
+    let (stderr_tx, stderr_rx) = mpsc::channel::<()>();
+    // What the worker wrote is collected as it arrives, so it survives a
+    // stray process holding the pipe open after the worker exits.
+    let stderr_tail = Arc::new(Mutex::new(Tail::new(STDERR_LIMIT)));
+    let collected = Arc::clone(&stderr_tail);
     // Neither reader is joined: both report over their channels, so a pipe
     // held open by a stray process can't hold up the result.
     std::thread::spawn(move || {
-        let _ = stderr_tx
-            .send(stderr.map_or_else(String::new, |stderr| read_tail(stderr, STDERR_LIMIT)));
+        if let Some(stderr) = stderr {
+            read_into(stderr, &collected);
+        }
+        let _ = stderr_tx.send(());
     });
 
     let mut cancel_sent: Option<Instant> = None;
@@ -484,10 +541,16 @@ pub fn run_worker(
             }
         }
     }
-    let stderr = stderr_rx.recv_timeout(remaining()).unwrap_or_else(|_| {
+    if stderr_rx.recv_timeout(remaining()).is_err() {
         (hooks.log)("the filter worker's error output stayed open after it exited");
-        String::new()
-    });
+    }
+    let stderr = std::mem::replace(
+        &mut *stderr_tail
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        Tail::new(0),
+    )
+    .into_text();
     let stderr_lines: Vec<&str> = stderr.lines().collect();
     let has_response = job.path().join(protocol::RESPONSE_NAME).exists();
     let mut result = protocol::read_response(job.path(), request);
@@ -560,13 +623,58 @@ fn for_each_short_line(input: impl Read, limit: usize, mut handle: impl FnMut(&s
     }
 }
 
-/// Reads `input` to the end, keeping only its last `limit` bytes.
-///
-/// The text starts with a note saying how much was dropped when the input
-/// was longer.
-fn read_tail(mut input: impl Read, limit: usize) -> String {
-    let mut kept: Vec<u8> = Vec::new();
-    let mut dropped = 0usize;
+/// The last `limit` bytes of a stream, collected as they arrive.
+struct Tail {
+    kept: Vec<u8>,
+    dropped: usize,
+    limit: usize,
+}
+
+impl Tail {
+    fn new(limit: usize) -> Self {
+        Self {
+            kept: Vec::new(),
+            dropped: 0,
+            limit,
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8]) {
+        self.kept.extend_from_slice(bytes);
+        // Compact only at twice the limit, so each byte is moved O(1) times.
+        if self.kept.len() > self.limit.saturating_mul(2) {
+            self.trim();
+        }
+    }
+
+    fn trim(&mut self) {
+        if self.kept.len() > self.limit {
+            let excess = self.kept.len() - self.limit;
+            self.kept.drain(..excess);
+            self.dropped = self.dropped.saturating_add(excess);
+        }
+    }
+
+    /// The text kept, starting with a note saying how much was dropped
+    /// when the input was longer than the limit.
+    fn into_text(mut self) -> String {
+        self.trim();
+        let text = String::from_utf8_lossy(&self.kept);
+        if self.dropped == 0 {
+            return text.into_owned();
+        }
+        // Start at a whole line so the first one isn't a fragment.
+        let start = text.find('\n').map_or(0, |newline| newline + 1);
+        format!(
+            "[{} earlier bytes of worker output dropped]\n{}",
+            self.dropped + start,
+            &text[start..]
+        )
+    }
+}
+
+/// Reads `input` to the end into `tail`.
+fn read_into(mut input: impl Read, tail: &Mutex<Tail>) {
     let mut chunk = [0u8; 8192];
     loop {
         let count = match input.read(&mut chunk) {
@@ -575,30 +683,110 @@ fn read_tail(mut input: impl Read, limit: usize) -> String {
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         };
-        kept.extend_from_slice(&chunk[..count]);
-        // Compact only at twice the limit, so each byte is moved O(1) times.
-        if kept.len() > limit.saturating_mul(2) {
-            let excess = kept.len() - limit;
-            kept.drain(..excess);
-            dropped = dropped.saturating_add(excess);
+        tail.lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(&chunk[..count]);
+    }
+}
+
+/// Waits for the prefix's wineserver to exit, which is when it writes the
+/// registry (and the `#arch=` line) to disk. Best effort: without
+/// `wineserver` the prefix is still usable, just checked again next run.
+fn wait_for_wineserver(wine: &OsStr, env: &[(String, String)]) {
+    // `wineserver` is installed next to `wine`.
+    let wineserver = Path::new(wine)
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map_or_else(|| PathBuf::from("wineserver"), |dir| dir.join("wineserver"));
+    let mut command = Command::new(wineserver);
+    command
+        .arg("-w")
+        .envs(env.iter().map(|(key, value)| (key, value)))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    hide_console(&mut command);
+    let _ = command.status();
+}
+
+/// Creates the worker's Wine prefix if it does not exist yet, and checks
+/// that it can run `arch`.
+///
+/// Wine would create the prefix by itself, but then its first-run setup
+/// happens inside the filter run and may stop to offer to install Mono and
+/// Gecko. Here it runs unattended, with those two disabled, once.
+fn prepare_wine_prefix(
+    wine: &OsStr,
+    env: &[(String, String)],
+    arch: &str,
+    job: &Path,
+    hooks: &mut Hooks,
+) -> Result<(), String> {
+    // Two jobs starting at once must not both set up the prefix.
+    static SETUP: Mutex<()> = Mutex::new(());
+    let Some(prefix) = env
+        .iter()
+        .find(|(key, _)| key == "WINEPREFIX")
+        .map(|(_, value)| PathBuf::from(value))
+    else {
+        return Ok(());
+    };
+    let _guard = SETUP
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !prefix.join("system.reg").exists() {
+        (hooks.log)(&format!(
+            "setting up the Wine prefix {} (first run only)",
+            prefix.display()
+        ));
+        if let Some(parent) = prefix.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("Could not create {}: {error}", parent.display()))?;
+        }
+        // Output goes to a file: wineserver outlives wineboot and would
+        // hold a pipe open.
+        let log_path = job.join("wineboot.log");
+        let log = std::fs::File::create(&log_path)
+            .map_err(|error| format!("Could not write {}: {error}", log_path.display()))?;
+        let mut command = Command::new(wine);
+        command
+            .args(["wineboot", "--init"])
+            .envs(env.iter().map(|(key, value)| (key, value)))
+            .env("WINEDLLOVERRIDES", "mscoree,mshtml=")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(log);
+        hide_console(&mut command);
+        let status = command.status().map_err(|error| {
+            format!("Could not start Wine ({}): {error}", wine.to_string_lossy())
+        })?;
+        let output = std::fs::read_to_string(&log_path).unwrap_or_default();
+        for line in output.lines() {
+            (hooks.log)(line);
+        }
+        if status.success() {
+            wait_for_wineserver(wine, env);
+        } else {
+            return Err(format!(
+                "Could not set up the Wine prefix {} (wineboot {status}).{}",
+                prefix.display(),
+                if output.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!("\n\n{}", output.trim())
+                }
+            ));
         }
     }
-    if kept.len() > limit {
-        let excess = kept.len() - limit;
-        kept.drain(..excess);
-        dropped = dropped.saturating_add(excess);
+    if arch == "win-x64" && wine_prefix_arch(&prefix) == Some(PrefixArch::Win32) {
+        return Err(format!(
+            "The Wine prefix {} is 32-bit and cannot run 64-bit filters. Install a 64-bit \
+             Wine (wine64, or wine with WoW64 support), then delete that folder so 8bf-host \
+             creates it again.",
+            prefix.display()
+        ));
     }
-    let text = String::from_utf8_lossy(&kept);
-    if dropped == 0 {
-        return text.into_owned();
-    }
-    // Start at a whole line so the first one isn't a fragment.
-    let start = text.find('\n').map_or(0, |newline| newline + 1);
-    format!(
-        "[{} earlier bytes of worker output dropped]\n{}",
-        dropped + start,
-        &text[start..]
-    )
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -790,6 +978,12 @@ mod tests {
         assert_eq!(lines, ["PROGRESS 1 2", "PROGRESS 2 2"]);
     }
 
+    fn read_tail(input: &[u8], limit: usize) -> String {
+        let tail = Mutex::new(Tail::new(limit));
+        read_into(input, &tail);
+        tail.into_inner().unwrap().into_text()
+    }
+
     #[test]
     fn only_the_end_of_stderr_is_kept() {
         assert_eq!(read_tail(&b"short\n"[..], 100), "short\n");
@@ -834,7 +1028,11 @@ mod tests {
         let plan = Plan {
             arch: "native".into(),
             placement: Placement::Worker {
-                command: vec!["/bin/sh".into(), "-c".into(), "sleep 30 & exit 3".into()],
+                command: vec![
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    "echo 'it went wrong' >&2; sleep 30 & exit 3".into(),
+                ],
                 env: Vec::new(),
                 wine: false,
             },
@@ -858,5 +1056,48 @@ mod tests {
         );
         assert_eq!(result.status, RunStatus::Error);
         assert!(result.message.contains("code 3"), "{}", result.message);
+        // What it wrote before exiting is still reported.
+        assert!(
+            result.message.contains("it went wrong"),
+            "{}",
+            result.message
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_32_bit_wine_prefix_is_not_used_for_64_bit_filters() {
+        let prefix = tempfile::tempdir().unwrap();
+        std::fs::write(
+            prefix.path().join("system.reg"),
+            "WINE REGISTRY Version 2\n;; All keys relative to \\Machine\n\n#arch=win32\n",
+        )
+        .unwrap();
+        assert_eq!(wine_prefix_arch(prefix.path()), Some(PrefixArch::Win32));
+        let mut config = config();
+        config.workers.win_x64 = Some(PathBuf::from("/opt/w/8bf-host-win-x64.exe"));
+        config.workers.win_x86 = Some(PathBuf::from("/opt/w/8bf-host-win-x86.exe"));
+        config.wine.prefix = Some(prefix.path().to_path_buf());
+        let host = env(Platform::Unix, "native");
+
+        let error = plan(&info(&["win-x64"]), &config, &host).unwrap_err();
+        assert!(error.to_string().contains("is 32-bit"), "{error}");
+        assert!(error.to_string().contains("wine.prefix"), "{error}");
+        // A filter that also has 32-bit code falls back to it.
+        let plan = plan(&info(&["win-x64", "win-x86"]), &config, &host).unwrap();
+        assert_eq!(plan.arch, "win-x86");
+    }
+
+    #[test]
+    fn wine_uses_its_own_prefix_by_default() {
+        let config = config();
+        assert_eq!(
+            config.wine.effective_prefix(),
+            crate::config::default_wine_prefix()
+        );
+        assert!(config
+            .wine
+            .effective_prefix()
+            .is_some_and(|prefix| prefix.ends_with("8bf-host/wine")));
     }
 }
