@@ -1,6 +1,6 @@
 [package]
 name = "eightbf-host"
-version = "0.2.0"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 description = "Run Photoshop-compatible filter plug-ins (.8bf) from the command line or over HTTP"

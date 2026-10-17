@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0 - 2026-10-17
+
 Initial release.
 
 - `8bf-host run` filters image files (PNG, JPEG, TIFF, WebP, BMP, PNM, and
